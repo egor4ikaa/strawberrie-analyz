@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Анализатор земляники садовой v1.0</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.8.0/dist/tf.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8/dist/teachablemachine-image.min.js"></script>
+    <link src="stylesheet" href="berries.css">
+</head>
+<body>
+    <h1>🍓 Анализатор клубники</h1>
+    <p class="description">Наведите камеру на куст для анализа спелости ягод</p>
+    
+    <div id="webcam-container">
+        <video id="webcam" autoplay playsinline></video>
+    </div>
+    
+    <div id="controls">
+        <button id="start">Запустить камеру</button>
+        <button id="stop" style="background: var(--unripe); display: none;">Остановить</button>
+    </div>
+    
+    <div class="loading">
+        <div class="spinner"></div>
+        <p>Загрузка модели...</p>
+    </div>
+    
+    <div id="results" style="display: none;">
+        <div class="counters">
+            <h3>Количество ягод</h3>
+            <div class="counter">
+                <div class="counter-color" style="background: var(--ripe);"></div>
+                <span id="ripe-count">0</span> спелых
+            </div>
+            <div class="counter">
+                <div class="counter-color" style="background: var(--unripe);"></div>
+                <span id="unripe-count">0</span> неспелых
+            </div>
+        </div>
+        
+        <div id="chart-container">
+            <canvas id="chart"></canvas>
+        </div>
+    </div>
+    
+    <script>
+        const URL = "https://teachablemachine.withgoogle.com/models/-gv8z_sYx/";
+        let model, webcam, maxPredictions;
+        let chart = null;
+        
+        // Элементы интерфейса
+        const startBtn = document.getElementById('start');
+        const stopBtn = document.getElementById('stop');
+        const loadingDiv = document.querySelector('.loading');
+        const resultsDiv = document.getElementById('results');
+        const ripeCountEl = document.getElementById('ripe-count');
+        const unripeCountEl = document.getElementById('unripe-count');
+        const chartCanvas = document.getElementById('chart');
+        
+        // Инициализация
+        startBtn.addEventListener('click', init);
+        stopBtn.addEventListener('click', stopCamera);
+        
+        async function init() {
+            try {
+                startBtn.disabled = true;
+                loadingDiv.style.display = 'block';
+                
+                // 1. Запрос доступа к камере
+                const stream = await navigator.mediaDevices.getUserMedia({ 
+                    video: { 
+                        facingMode: 'environment',
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
+                    }, 
+                    audio: false 
+                });
+                
+                // 2. Загрузка модели
+                model = await tmImage.load(URL + "model.json", URL + "metadata.json");
+                maxPredictions = model.getTotalClasses();
+                
+                // 3. Настройка камеры
+                webcam = new tmImage.Webcam(400, 400, true);
+                await webcam.setup(stream);
+                await webcam.play();
+                document.getElementById('webcam-container').appendChild(webcam.canvas);
+                
+                // 4. Инициализация диаграммы
+                initChart();
+                
+                // Показываем интерфейс
+                loadingDiv.style.display = 'none';
+                resultsDiv.style.display = 'flex';
+                startBtn.style.display = 'none';
+                stopBtn.style.display = 'block';
+                
+                // Запускаем обработку
+                window.requestAnimationFrame(loop);
+                
+            } catch (error) {
+                console.error("Ошибка:", error);
+                alert(`Ошибка: ${error.message}`);
+                loadingDiv.style.display = 'none';
+                startBtn.disabled = false;
+            }
+        }
+        
+        function stopCamera() {
+            if (webcam) {
+                webcam.stop();
+                document.getElementById('webcam-container').removeChild(webcam.canvas);
+            }
+            stopBtn.style.display = 'none';
+            startBtn.style.display = 'block';
+            startBtn.disabled = false;
+        }
+        
+        async function loop() {
+            webcam.update();
+            await predict();
+            window.requestAnimationFrame(loop);
+        }
+        
+        async function predict() {
+            const prediction = await model.predict(webcam.canvas);
+            let ripeCount = 0;
+            let unripeCount = 0;
+            
+            for (let i = 0; i < maxPredictions; i++) {
+                if (prediction[i].className === "Спелые" && prediction[i].probability > 0.7) {
+                    ripeCount++;
+                } else if (prediction[i].className === "Неспелые" && prediction[i].probability > 0.7) {
+                    unripeCount++;
+                }
+            }
+            
+            // Обновляем счетчики
+            ripeCountEl.textContent = ripeCount;
+            unripeCountEl.textContent = unripeCount;
+            
+            // Обновляем диаграмму
+            updateChart(ripeCount, unripeCount);
+        }
+        
+        function initChart() {
+            // Подключаем Chart.js динамически
+            const script = document.createElement('script');
+            script.src = 'https://cdn.jsdelivr.net/npm/chart.js';
+            script.onload = () => {
+                chart = new Chart(chartCanvas, {
+                    type: 'doughnut',
+                    data: {
+                        labels: ['Спелые', 'Неспелые'],
+                        datasets: [{
+                            data: [0, 0],
+                            backgroundColor: [
+                                'rgba(255, 107, 107, 0.8)',
+                                'rgba(78, 205, 196, 0.8)'
+                            ],
+                            borderWidth: 0
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        cutout: '70%',
+                        plugins: {
+                            legend: {
+                                position: 'bottom'
+                            }
+                        }
+                    }
+                });
+            };
+            document.head.appendChild(script);
+        }
+        
+        function updateChart(ripe, unripe) {
+            if (!chart) return;
+            
+            chart.data.datasets[0].data = [ripe, unripe];
+            
+            // Рассчитываем проценты
+            const total = ripe + unripe;
+            if (total > 0) {
+                const ripePercent = Math.round((ripe / total) * 100);
+                const unripePercent = 100 - ripePercent;
+                chart.data.labels = [
+                    `Спелые ${ripePercent}%`,
+                    `Неспелые ${unripePercent}%`
+                ];
+            }
+            
+            chart.update();
+        }
+    </script>
+</body>
+</html>
